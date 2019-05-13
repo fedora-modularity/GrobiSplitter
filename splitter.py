@@ -108,6 +108,14 @@ def parse_repository(directory):
     directory = os.path.abspath(directory)
     repo_info = _get_repoinfo(directory)
 
+    # Sometimes you get someone who blindly runs this against any
+    # repository they find.  Let them know this is meant to work only
+    # on regular repos.
+    if 'modules' not in repo_info:
+        print("This repository has no modules defined.")
+        print("Grobisplitter only works on repos with modules.")
+        sys.exit(0)
+
     mod = _parse_repository_modular(repo_info)
     modpkgset = _get_modular_pkgset(mod)
     non_modular = _parse_repository_non_modular(repo_info, modpkgset)
