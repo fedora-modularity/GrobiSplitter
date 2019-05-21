@@ -1,2 +1,3 @@
 # GrobiSplitter
-Tool to split mixed/modular RPM repositories up per module NSVC
+A tool to split a mixed/modular RPM repository into multiple
+repositories per module NSVCA.

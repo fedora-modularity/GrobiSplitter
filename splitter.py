@@ -56,7 +56,12 @@ def _get_hawkey_sack(repo_info):
     return primary_sack
 
 def _get_filelist(package_sack):
-    pkg_list = dict()
+    """
+    Determine the file locations of all packages in the sack. Use the
+    package-name-epoch-version-release-arch as the key.
+    Returns a dictionary.
+    """
+    pkg_list = {}
     for pkg in hawkey.Query(package_sack):
         nevr="%s-%s:%s-%s.%s"% (pkg.name,pkg.epoch,pkg.version,pkg.release,pkg.arch)
         pkg_list[nevr] = pkg.location
@@ -110,6 +115,11 @@ def _parse_repository_modular(repo_info,package_sack):
 
 
 def _get_modular_pkgset(mod):
+    """
+    Takes a module and goes through the moduleset to determine which
+    packages are inside it. 
+    Returns a list of packages
+    """
     pkgs = set()
 
     for modcts in mod.values():
@@ -120,6 +130,12 @@ def _get_modular_pkgset(mod):
 
 
 def validate_filenames(directory, repoinfo):
+    """
+    Take a directory and repository information. Test each file in
+    repository to exist in said module. This stops us when dealing
+    with broken repositories or missing modules.
+    Returns True if no problems found. False otherwise.
+    """
     isok = True
     for modname in repoinfo:
         for pkg in repoinfo[modname]:
@@ -130,6 +146,11 @@ def validate_filenames(directory, repoinfo):
 
 
 def _perform_action(src, dst, action):
+    """
+    Performs either a copy, hardlink or symlink of the file src to the
+    file destination.
+    Returns None
+    """
     if action == 'copy':
         try:
             shutil.copy(src, dst)
