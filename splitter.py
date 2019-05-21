@@ -204,8 +204,6 @@ def parse_args():
                         action='store_true', default=False)
     parser.add_argument('--create-repos', help='Create repository metadatas',
                         action='store_true', default=False)
-    parser.add_argument('--default', help='Only create default and ursa repos',
-                        action='store_true', default=False)
     return parser.parse_args()
 
 
