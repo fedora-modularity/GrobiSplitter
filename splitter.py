@@ -41,6 +41,10 @@ def _get_repoinfo(directory):
         return r.getinfo(librepo.LRR_YUM_REPO)
 
 def _get_hawkey_sack(repo_info):
+    """
+    A function to pull in the repository sack from hawkey.
+    Returns the sack.
+    """
     hk_repo = hawkey.Repo("")
     hk_repo.filelists_fn = repo_info["filelists"]
     hk_repo.primary_fn = repo_info["primary"]
@@ -53,6 +57,12 @@ def _get_hawkey_sack(repo_info):
 
 
 def _parse_repository_non_modular(repo_info, modpkgset):
+    """
+    Simple routine to go through a repo, and figure out which packages
+    are not in any module. Add the file locations for those packages
+    so we can link to them.
+    Returns a set of file locations.
+    """
     sack = _get_hawkey_sack(repo_info)
     pkgs = set()
 
@@ -70,6 +80,10 @@ def _get_filename(nevra):
 
 
 def _parse_repository_modular(repo_info):
+    """
+    Returns a dictionary of packages indexed by the modules they are
+    contained in.
+    """
     cts = {}
     idx = mmd.ModuleIndex()
     with gzip.GzipFile(filename=repo_info['modules'], mode='r') as gzf:
@@ -84,7 +98,7 @@ def _parse_repository_modular(repo_info):
     for modname in idx.get_module_names():
         mod = idx.get_module(modname)
         for stream in mod.get_all_streams():
-            cts[stream.get_nsvc()] = [
+            cts[stream.get_NSVCA()] = [
                 _get_filename(pkg)
                 for pkg
                 in stream.get_rpm_artifacts()]
@@ -139,6 +153,11 @@ def perform_split(repos, args):
 
 
 def create_repos(target, repos):
+    """
+    Routine to create repositories. Input is target directory and a
+    list of repositories.
+    Returns None
+    """
     for modname in repos:
         subprocess.run([
             'createrepo_c', os.path.join(target, modname),
