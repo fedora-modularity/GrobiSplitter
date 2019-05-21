@@ -55,15 +55,21 @@ def _get_hawkey_sack(repo_info):
     
     return primary_sack
 
+def _get_filelist(package_sack):
+    pkg_list = dict()
+    for pkg in hawkey.Query(package_sack):
+        nevr="%s-%s:%s-%s.%s"% (pkg.name,pkg.epoch,pkg.version,pkg.release,pkg.arch)
+        pkg_list[nevr] = pkg.location
+    return pkg_list
 
-def _parse_repository_non_modular(repo_info, modpkgset):
+def _parse_repository_non_modular(package_sack, repo_info, modpkgset):
     """
     Simple routine to go through a repo, and figure out which packages
     are not in any module. Add the file locations for those packages
     so we can link to them.
     Returns a set of file locations.
     """
-    sack = _get_hawkey_sack(repo_info)
+    sack = package_sack
     pkgs = set()
 
     for pkg in hawkey.Query(sack):
@@ -72,14 +78,7 @@ def _parse_repository_non_modular(repo_info, modpkgset):
         pkgs.add(pkg.location)
     return pkgs
 
-
-def _get_filename(nevra):
-    n, ev, ra = nevra.rsplit('-', 2)
-    ev = ev.split(':', 1)[1]
-    return 'Packages/%s-%s-%s.rpm' % (n, ev, ra)
-
-
-def _parse_repository_modular(repo_info):
+def _parse_repository_modular(repo_info,package_sack):
     """
     Returns a dictionary of packages indexed by the modules they are
     contained in.
@@ -94,14 +93,19 @@ def _parse_repository_modular(repo_info):
         if not res:
             raise Exception("YAML FAILURE: res != True")
 
+    pkgs_list = _get_filelist(package_sack)
     idx.upgrade_streams(2)
     for modname in idx.get_module_names():
         mod = idx.get_module(modname)
         for stream in mod.get_all_streams():
-            cts[stream.get_NSVCA()] = [
-                _get_filename(pkg)
-                for pkg
-                in stream.get_rpm_artifacts()]
+            templ = list()
+            for pkg in stream.get_rpm_artifacts():
+                if pkg in pkgs_list:
+                    templ.append(pkgs_list[pkg])
+                else:
+                    continue
+            cts[stream.get_NSVCA()] = templ
+                
     return cts
 
 
@@ -211,15 +215,16 @@ def parse_repository(directory):
     # Sometimes you get someone who blindly runs this against any
     # repository they find.  Let them know this is meant to work only
     # on repositories with modules.
-
     if 'modules' not in repo_info:
         print("This repository has no modules defined.")
         print("Grobisplitter only works on repos with modules.")
         sys.exit(0)
 
-    mod = _parse_repository_modular(repo_info)
+    package_sack = _get_hawkey_sack(repo_info)
+    _get_filelist(package_sack)
+    mod = _parse_repository_modular(repo_info,package_sack)
     modpkgset = _get_modular_pkgset(mod)
-    non_modular = _parse_repository_non_modular(repo_info, modpkgset)
+    non_modular = _parse_repository_non_modular(package_sack,repo_info, modpkgset)
 
     mod['non_modular'] = non_modular
 
