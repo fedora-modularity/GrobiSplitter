@@ -204,6 +204,8 @@ def parse_args():
                         action='store_true', default=False)
     parser.add_argument('--create-repos', help='Create repository metadatas',
                         action='store_true', default=False)
+    parser.add_argument('--only-defaults', help='Only output default modules',
+                        action='store_true', default=False)
     return parser.parse_args()
 
 
@@ -231,20 +233,21 @@ def parse_repository(directory):
     directory = os.path.abspath(directory)
     repo_info = _get_repoinfo(directory)
 
-    # Sometimes you get someone who blindly runs this against any
-    # repository they find.  Let them know this is meant to work only
-    # on repositories with modules.
-    if 'modules' not in repo_info:
-        print("This repository has no modules defined.")
-        print("Grobisplitter only works on repos with modules.")
-        sys.exit(0)
-
+    # Get the package sack and get a filelist of all packages.
     package_sack = _get_hawkey_sack(repo_info)
     _get_filelist(package_sack)
-    mod = _parse_repository_modular(repo_info,package_sack)
-    modpkgset = _get_modular_pkgset(mod)
-    non_modular = _parse_repository_non_modular(package_sack,repo_info, modpkgset)
 
+    # If we have a repository with no modules we do not want our
+    # script to error out but just remake the repository with
+    # everything in a known sack (aka non_modular).
+    if 'modules' in repo_info:
+        mod = _parse_repository_modular(repo_info,package_sack,only_defaults)
+        modpkgset = _get_modular_pkgset(mod)
+    else:
+        mod = dict()
+        modpkgset = set()
+
+    non_modular = _parse_repository_non_modular(package_sack,repo_info, modpkgset)
     mod['non_modular'] = non_modular
 
     return mod
