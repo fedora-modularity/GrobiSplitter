@@ -24,6 +24,20 @@ except:
     
 mmd = Modulemd
 
+# This code is from Stephen Gallagher to make my other caveman code
+# less icky.
+def _get_latest_streams (mymod, stream):
+    """
+    Routine takes modulemd object and a stream name.
+    Finds the lates stream from that and returns that as a stream
+    object. 
+    """
+    all_streams = mymod.search_streams(stream, 0)
+    latest_streams = mymod.search_streams(stream,
+                                          all_streams[0].props.version) 
+    
+    return latest_streams
+    
 def _get_repoinfo(directory):
     """
     A function which goes into the given directory and sets up the
@@ -128,23 +142,6 @@ def _get_modular_pkgset(mod):
 
     return list(pkgs)
 
-
-def validate_filenames(directory, repoinfo):
-    """
-    Take a directory and repository information. Test each file in
-    repository to exist in said module. This stops us when dealing
-    with broken repositories or missing modules.
-    Returns True if no problems found. False otherwise.
-    """
-    isok = True
-    for modname in repoinfo:
-        for pkg in repoinfo[modname]:
-            if not os.path.exists(os.path.join(directory, pkg)):
-                isok = False
-                print("Path %s from mod %s did not exist" % (pkg, modname))
-    return isok
-
-
 def _perform_action(src, dst, action):
     """
     Performs either a copy, hardlink or symlink of the file src to the
@@ -163,9 +160,123 @@ def _perform_action(src, dst, action):
     elif action == 'symlink':
         os.symlink(src, dst)
 
+def validate_filenames(directory, repoinfo):
+    """
+    Take a directory and repository information. Test each file in
+    repository to exist in said module. This stops us when dealing
+    with broken repositories or missing modules.
+    Returns True if no problems found. False otherwise.
+    """
+    isok = True
+    for modname in repoinfo:
+        for pkg in repoinfo[modname]:
+            if not os.path.exists(os.path.join(directory, pkg)):
+                isok = False
+                print("Path %s from mod %s did not exist" % (pkg, modname))
+    return isok
 
-def perform_split(repos, args):
+
+def get_default_modules(directory):
+    """
+    Work through the list of modules and come up with a default set of
+    modules which would be the minimum to output. 
+    Returns a set of modules 
+    """
+    directory = os.path.abspath(directory)
+    repo_info = _get_repoinfo(directory)
+
+    provides = set()
+    contents = set()
+    if 'modules' not in repo_info:
+        return contents
+    idx = mmd.ModuleIndex()
+    with gzip.GzipFile(filename=repo_info['modules'], mode='r') as gzf:
+        mmdcts = gzf.read().decode('utf-8')
+        res, failures = idx.update_from_string(mmdcts, True)
+        if len(failures) != 0:
+            raise Exception("YAML FAILURE: FAILURES: %s" % failures)
+        if not res:
+            raise Exception("YAML FAILURE: res != True")
+
+    idx.upgrade_streams(2)
+
+    # OK this is cave-man no-sleep programming. I expect there is a
+    # better way to do this that would be a lot better. However after
+    # a long long day.. this is what I have.
+
+    # First we oo through the default streams and create a set of
+    # provides that we can check against later.
+    for modname in idx.get_default_streams():
+        mod = idx.get_module(modname)
+        # Get the default streams and loop through them.
+        stream_set = mod.get_streams_by_stream_name(
+            mod.get_defaults().get_default_stream())
+        for stream in stream_set:
+            tempstr = "%s:%s" % (stream.props.module_name,
+                                 stream.props.stream_name)
+            provides.add(tempstr)
+
+
+    # Now go through our list and build up a content lists which will
+    # have only modules which have their dependencies met
+    tempdict = {}
+    for modname in idx.get_default_streams():
+        mod = idx.get_module(modname)
+        # Get the default streams and loop through them.
+        # This is a sorted list with the latest in it. We could drop
+        # looking at later ones here in a future version. (aka lines
+        # 237 to later)
+        stream_set = mod.get_streams_by_stream_name(
+            mod.get_defaults().get_default_stream())
+        for stream in stream_set:
+            ourname = stream.get_NSVCA()
+            tmp_name = "%s:%s" % (stream.props.module_name,
+                                 stream.props.stream_name)
+            # Get dependencies is a list of items. All of the modules
+            # seem to only have 1 item in them, but we should loop
+            # over the list anyway.
+            for deps in stream.get_dependencies():
+                isprovided = True # a variable to say this can be added.
+                for mod in deps.get_runtime_modules():
+                    tempstr=""
+                    # It does not seem easy to figure out what the
+                    # platform is so just assume we will meet it.
+                    if mod != 'platform':
+                        for stm in deps.get_runtime_streams(mod):
+                            tempstr = "%s:%s" %(mod,stm)
+                            if tempstr not in provides:
+                                # print( "%s : %s not found." % (ourname,tempstr))
+                                isprovided = False
+                    if isprovided:
+                        if tmp_name in tempdict:
+                            # print("We found %s" % tmp_name)
+                            # Get the stream version we are looking at
+                            ts1=ourname.split(":")[2]
+                            # Get the stream version we stored away
+                            ts2=tempdict[tmp_name].split(":")[2]
+                            # See if we got a newer one. We probably
+                            # don't as it is a sorted list but we
+                            # could have multiple contexts which would
+                            # change things.
+                            if ( int(ts1) > int(ts2) ):
+                                # print ("%s > %s newer for %s", ts1,ts2,ourname)
+                                tempdict[tmp_name] = ourname
+                        else:
+                            # print("We did not find %s" % tmp_name)
+                            tempdict[tmp_name] = ourname
+    # OK we finally got all our stream names we want to send back to
+    # our calling function. Read them out and add them to the set.
+    for indx in tempdict:
+        contents.add(tempdict[indx])
+
+    return contents
+
+
+def perform_split(repos, args, def_modules):
     for modname in repos:
+        if args.only_defaults and modname not in def_modules:
+            continue
+        
         targetdir = os.path.join(args.target, modname)
         os.mkdir(targetdir)
 
@@ -177,13 +288,15 @@ def perform_split(repos, args):
                 args.action)
 
 
-def create_repos(target, repos):
+def create_repos(target, repos,def_modules, only_defaults):
     """
     Routine to create repositories. Input is target directory and a
     list of repositories.
     Returns None
     """
     for modname in repos:
+        if only_defaults and modname not in def_modules:
+            continue
         subprocess.run([
             'createrepo_c', os.path.join(target, modname),
             '--no-database'])
@@ -203,6 +316,8 @@ def parse_args():
     parser.add_argument('--skip-missing', help='Skip missing packages',
                         action='store_true', default=False)
     parser.add_argument('--create-repos', help='Create repository metadatas',
+                        action='store_true', default=False)
+    parser.add_argument('--only-defaults', help='Only output default modules',
                         action='store_true', default=False)
     return parser.parse_args()
 
@@ -231,21 +346,27 @@ def parse_repository(directory):
     directory = os.path.abspath(directory)
     repo_info = _get_repoinfo(directory)
 
-    # Sometimes you get someone who blindly runs this against any
-    # repository they find.  Let them know this is meant to work only
-    # on repositories with modules.
-    if 'modules' not in repo_info:
-        print("This repository has no modules defined.")
-        print("Grobisplitter only works on repos with modules.")
-        sys.exit(0)
-
+    # Get the package sack and get a filelist of all packages.
     package_sack = _get_hawkey_sack(repo_info)
     _get_filelist(package_sack)
-    mod = _parse_repository_modular(repo_info,package_sack)
-    modpkgset = _get_modular_pkgset(mod)
-    non_modular = _parse_repository_non_modular(package_sack,repo_info, modpkgset)
 
+    # If we have a repository with no modules we do not want our
+    # script to error out but just remake the repository with
+    # everything in a known sack (aka non_modular).
+     
+    if 'modules' in repo_info:
+        mod = _parse_repository_modular(repo_info,package_sack)
+        modpkgset = _get_modular_pkgset(mod)
+    else:
+        mod = dict()
+        modpkgset = set()
+
+    non_modular = _parse_repository_non_modular(package_sack,repo_info, 
+                                  modpkgset) 
     mod['non_modular'] = non_modular
+
+    ## We should probably go through our default modules here and
+    ## remove them from our mod. This would cut down some code paths.
 
     return mod
 
@@ -258,13 +379,19 @@ def main():
 
     repos = parse_repository(args.repository)
 
+    if args.only_defaults:
+        def_modules = get_default_modules(args.repository)
+    else:
+        def_modules = set()
+    def_modules.add('non_modular')        
+    
     if not args.skip_missing:
         if not validate_filenames(args.repository, repos):
             raise ValueError("Package files were missing!")
     if args.target:
-        perform_split(repos, args)
+        perform_split(repos, args, def_modules)
         if args.create_repos:
-            create_repos(args.target, repos)
+            create_repos(args.target, repos,def_modules,args.only_defaults)
 
 if __name__ == '__main__':
     main()
