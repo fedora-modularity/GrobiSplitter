@@ -18,9 +18,9 @@ import sys
 try:
     gi.require_version('Modulemd', '2.0')
     from gi.repository import Modulemd
-except BaseException:
-    print("We require newer vesions of modulemd than installed..")
-    sys.exit(0)
+except ValueError:
+    print("libmodulemd 2.0 is not installed..")
+    sys.exit(1)
 
 mmd = Modulemd
 
