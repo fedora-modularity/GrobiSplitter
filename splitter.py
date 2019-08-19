@@ -17,12 +17,10 @@ import sys
 # have the tools we need.
 try:
     gi.require_version('Modulemd', '2.0')
-    from gi.repository import Modulemd
+    from gi.repository import Modulemd as mmd
 except ValueError:
     print("libmodulemd 2.0 is not installed..")
     sys.exit(1)
-
-mmd = Modulemd
 
 # This code is from Stephen Gallagher to make my other caveman code
 # less icky.
