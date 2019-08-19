@@ -12,6 +12,7 @@ import tempfile
 import os
 import subprocess
 import sys
+import logging
 
 # Look for a specific version of modulemd. The 1.x series does not
 # have the tools we need.
@@ -184,6 +185,75 @@ def validate_filenames(directory, repoinfo):
     return isok
 
 
+def _get_recursive_dependencies(all_deps, idx, stream):
+    if stream.get_NSVCA() in all_deps:
+        # We've already encountered this NSVCA, so don't go through it again
+        logging.debug('Already included {}'.format(stream.get_NSVCA()))
+        return
+
+    # Store this NSVCA/NS pair
+    local_deps = all_deps
+    local_deps.add(stream.get_NSVCA())
+
+    logging.debug("Recursive deps: {}".format(stream.get_NSVCA()))
+
+    # Loop through the dependencies for this stream
+    deps = stream.get_dependencies()
+
+    # At least one of the dependency array entries must exist in the repo
+    found_dep = False
+    for dep in deps:
+        # Within an array entry, all of the modules must be present in the
+        # index
+        found_all_modules = True
+        for modname in dep.get_runtime_modules():
+            # Ignore "platform" because it's special
+            if modname == "platform":
+                logging.debug('Skipping platform')
+                continue
+            logging.debug('Processing dependency on module {}'.format(modname))
+
+            mod = idx.get_module(modname)
+            if not mod:
+                # This module wasn't present in the index.
+                found_module = False
+                continue
+
+            # Within a module, at least one of the requested streams must be
+            # present
+            streamnames = dep.get_runtime_streams(modname)
+            found_stream = False
+            for streamname in streamnames:
+                stream_list = _get_latest_streams(mod, streamname)
+                for inner_stream in stream_list:
+                    try:
+                        _get_recursive_dependencies(
+                            local_deps, idx, inner_stream)
+                    except FileNotFoundError as e:
+                        # Could not find all of this stream's dependencies in
+                        # the repo
+                        continue
+                    found_stream = True
+
+            # None of the streams were found for this module
+            if not found_stream:
+                found_all_modules = False
+
+        # We've iterated through all of the modules; if it's still True, this
+        # dependency is consistent in the index
+        if found_all_modules:
+            found_dep = True
+
+    # We were unable to resolve the dependencies for any of the array entries.
+    # raise FileNotFoundError
+    if not found_dep:
+        raise FileNotFoundError(
+            "Could not resolve dependencies for {}".format(
+                stream.get_NSVCA()))
+
+    all_deps.update(local_deps)
+
+
 def get_default_modules(directory):
     """
     Work through the list of modules and come up with a default set of
@@ -193,10 +263,11 @@ def get_default_modules(directory):
     directory = os.path.abspath(directory)
     repo_info = _get_repoinfo(directory)
 
-    provides = set()
-    contents = set()
+    all_deps = set()
+
     if 'modules' not in repo_info:
-        return contents
+        return all_deps
+
     idx = mmd.ModuleIndex()
     with gzip.GzipFile(filename=repo_info['modules'], mode='r') as gzf:
         mmdcts = gzf.read().decode('utf-8')
@@ -208,75 +279,27 @@ def get_default_modules(directory):
 
     idx.upgrade_streams(mmd.ModuleStreamVersionEnum.TWO)
 
-    # OK this is cave-man no-sleep programming. I expect there is a
-    # better way to do this that would be a lot better. However after
-    # a long long day.. this is what I have.
-
-    # First we oo through the default streams and create a set of
-    # provides that we can check against later.
-    for modname in idx.get_default_streams():
+    for modname, streamname in idx.get_default_streams().items():
+        # Only the latest version of a stream is important, as that is the only one that DNF will consider in its
+        # transaction logic. We still need to handle each context individually.
         mod = idx.get_module(modname)
-        # Get the default streams and loop through them.
-        stream_set = mod.get_streams_by_stream_name(
-            mod.get_defaults().get_default_stream())
+        stream_set = _get_latest_streams(mod, streamname)
         for stream in stream_set:
-            tempstr = "%s:%s" % (stream.props.module_name,
-                                 stream.props.stream_name)
-            provides.add(tempstr)
+            # Different contexts have different dependencies
+            try:
+                logging.debug("Processing {}".format(stream.get_NSVCA()))
+                _get_recursive_dependencies(all_deps, idx, stream)
+                logging.debug("----------")
+            except FileNotFoundError as e:
+                # Not all dependencies could be satisfied
+                print(
+                    "Not all dependencies for {} could be satisfied. {}. Skipping".format(
+                        stream.get_NSVCA(), e))
+                continue
 
-    # Now go through our list and build up a content lists which will
-    # have only modules which have their dependencies met
-    tempdict = {}
-    for modname in idx.get_default_streams():
-        mod = idx.get_module(modname)
-        # Get the default streams and loop through them.
-        # This is a sorted list with the latest in it. We could drop
-        # looking at later ones here in a future version. (aka lines
-        # 237 to later)
-        stream_set = mod.get_streams_by_stream_name(
-            mod.get_defaults().get_default_stream())
-        for stream in stream_set:
-            ourname = stream.get_NSVCA()
-            tmp_name = "%s:%s" % (stream.props.module_name,
-                                  stream.props.stream_name)
-            # Get dependencies is a list of items. All of the modules
-            # seem to only have 1 item in them, but we should loop
-            # over the list anyway.
-            for deps in stream.get_dependencies():
-                isprovided = True  # a variable to say this can be added.
-                for mod in deps.get_runtime_modules():
-                    tempstr = ""
-                    # It does not seem easy to figure out what the
-                    # platform is so just assume we will meet it.
-                    if mod != 'platform':
-                        for stm in deps.get_runtime_streams(mod):
-                            tempstr = "%s:%s" % (mod, stm)
-                            if tempstr not in provides:
-                                # print( "%s : %s not found." % (ourname,tempstr))
-                                isprovided = False
-                    if isprovided:
-                        if tmp_name in tempdict:
-                            # print("We found %s" % tmp_name)
-                            # Get the stream version we are looking at
-                            ts1 = ourname.split(":")[2]
-                            # Get the stream version we stored away
-                            ts2 = tempdict[tmp_name].split(":")[2]
-                            # See if we got a newer one. We probably
-                            # don't as it is a sorted list but we
-                            # could have multiple contexts which would
-                            # change things.
-                            if (int(ts1) > int(ts2)):
-                                # print ("%s > %s newer for %s", ts1,ts2,ourname)
-                                tempdict[tmp_name] = ourname
-                        else:
-                            # print("We did not find %s" % tmp_name)
-                            tempdict[tmp_name] = ourname
-    # OK we finally got all our stream names we want to send back to
-    # our calling function. Read them out and add them to the set.
-    for indx in tempdict:
-        contents.add(tempdict[indx])
+    logging.debug('Default module streams: {}'.format(all_deps))
 
-    return contents
+    return all_deps
 
 
 def perform_split(repos, args, def_modules):
@@ -316,6 +339,8 @@ def parse_args():
     """
     parser = argparse.ArgumentParser(description='Split repositories up')
     parser.add_argument('repository', help='The repository to split')
+    parser.add_argument('--debug', help='Enable debug logging',
+                        action='store_true', default=False)
     parser.add_argument('--action', help='Method to create split repos files',
                         choices=('hardlink', 'symlink', 'copy'),
                         default='hardlink')
@@ -383,6 +408,9 @@ def main():
     # Determine what the arguments are and
     args = parse_args()
 
+    if args.debug:
+        logging.basicConfig(level=logging.DEBUG)
+
     # Go through arguments and act on their values.
     setup_target(args)
 
@@ -392,6 +420,7 @@ def main():
         def_modules = get_default_modules(args.repository)
     else:
         def_modules = set()
+
     def_modules.add('non_modular')
 
     if not args.skip_missing:
