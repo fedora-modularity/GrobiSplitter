@@ -18,26 +18,29 @@ import sys
 try:
     gi.require_version('Modulemd', '2.0')
     from gi.repository import Modulemd
-except:
+except BaseException:
     print("We require newer vesions of modulemd than installed..")
     sys.exit(0)
-    
+
 mmd = Modulemd
 
 # This code is from Stephen Gallagher to make my other caveman code
 # less icky.
-def _get_latest_streams (mymod, stream):
+
+
+def _get_latest_streams(mymod, stream):
     """
     Routine takes modulemd object and a stream name.
     Finds the lates stream from that and returns that as a stream
-    object. 
+    object.
     """
     all_streams = mymod.search_streams(stream, 0)
     latest_streams = mymod.search_streams(stream,
-                                          all_streams[0].props.version) 
-    
+                                          all_streams[0].props.version)
+
     return latest_streams
-    
+
+
 def _get_repoinfo(directory):
     """
     A function which goes into the given directory and sets up the
@@ -54,6 +57,7 @@ def _get_repoinfo(directory):
         r = h.perform()
         return r.getinfo(librepo.LRR_YUM_REPO)
 
+
 def _get_hawkey_sack(repo_info):
     """
     A function to pull in the repository sack from hawkey.
@@ -66,8 +70,9 @@ def _get_hawkey_sack(repo_info):
 
     primary_sack = hawkey.Sack()
     primary_sack.load_repo(hk_repo, build_cache=False)
-    
+
     return primary_sack
+
 
 def _get_filelist(package_sack):
     """
@@ -77,9 +82,11 @@ def _get_filelist(package_sack):
     """
     pkg_list = {}
     for pkg in hawkey.Query(package_sack):
-        nevr="%s-%s:%s-%s.%s"% (pkg.name,pkg.epoch,pkg.version,pkg.release,pkg.arch)
+        nevr = "%s-%s:%s-%s.%s" % (pkg.name, pkg.epoch,
+                                   pkg.version, pkg.release, pkg.arch)
         pkg_list[nevr] = pkg.location
     return pkg_list
+
 
 def _parse_repository_non_modular(package_sack, repo_info, modpkgset):
     """
@@ -97,7 +104,8 @@ def _parse_repository_non_modular(package_sack, repo_info, modpkgset):
         pkgs.add(pkg.location)
     return pkgs
 
-def _parse_repository_modular(repo_info,package_sack):
+
+def _parse_repository_modular(repo_info, package_sack):
     """
     Returns a dictionary of packages indexed by the modules they are
     contained in.
@@ -124,14 +132,14 @@ def _parse_repository_modular(repo_info,package_sack):
                 else:
                     continue
             cts[stream.get_NSVCA()] = templ
-                
+
     return cts
 
 
 def _get_modular_pkgset(mod):
     """
     Takes a module and goes through the moduleset to determine which
-    packages are inside it. 
+    packages are inside it.
     Returns a list of packages
     """
     pkgs = set()
@@ -141,6 +149,7 @@ def _get_modular_pkgset(mod):
             pkgs.add(pkg)
 
     return list(pkgs)
+
 
 def _perform_action(src, dst, action):
     """
@@ -159,6 +168,7 @@ def _perform_action(src, dst, action):
         os.link(src, dst)
     elif action == 'symlink':
         os.symlink(src, dst)
+
 
 def validate_filenames(directory, repoinfo):
     """
@@ -179,8 +189,8 @@ def validate_filenames(directory, repoinfo):
 def get_default_modules(directory):
     """
     Work through the list of modules and come up with a default set of
-    modules which would be the minimum to output. 
-    Returns a set of modules 
+    modules which would be the minimum to output.
+    Returns a set of modules
     """
     directory = os.path.abspath(directory)
     repo_info = _get_repoinfo(directory)
@@ -216,7 +226,6 @@ def get_default_modules(directory):
                                  stream.props.stream_name)
             provides.add(tempstr)
 
-
     # Now go through our list and build up a content lists which will
     # have only modules which have their dependencies met
     tempdict = {}
@@ -231,19 +240,19 @@ def get_default_modules(directory):
         for stream in stream_set:
             ourname = stream.get_NSVCA()
             tmp_name = "%s:%s" % (stream.props.module_name,
-                                 stream.props.stream_name)
+                                  stream.props.stream_name)
             # Get dependencies is a list of items. All of the modules
             # seem to only have 1 item in them, but we should loop
             # over the list anyway.
             for deps in stream.get_dependencies():
-                isprovided = True # a variable to say this can be added.
+                isprovided = True  # a variable to say this can be added.
                 for mod in deps.get_runtime_modules():
-                    tempstr=""
+                    tempstr = ""
                     # It does not seem easy to figure out what the
                     # platform is so just assume we will meet it.
                     if mod != 'platform':
                         for stm in deps.get_runtime_streams(mod):
-                            tempstr = "%s:%s" %(mod,stm)
+                            tempstr = "%s:%s" % (mod, stm)
                             if tempstr not in provides:
                                 # print( "%s : %s not found." % (ourname,tempstr))
                                 isprovided = False
@@ -251,14 +260,14 @@ def get_default_modules(directory):
                         if tmp_name in tempdict:
                             # print("We found %s" % tmp_name)
                             # Get the stream version we are looking at
-                            ts1=ourname.split(":")[2]
+                            ts1 = ourname.split(":")[2]
                             # Get the stream version we stored away
-                            ts2=tempdict[tmp_name].split(":")[2]
+                            ts2 = tempdict[tmp_name].split(":")[2]
                             # See if we got a newer one. We probably
                             # don't as it is a sorted list but we
                             # could have multiple contexts which would
                             # change things.
-                            if ( int(ts1) > int(ts2) ):
+                            if (int(ts1) > int(ts2)):
                                 # print ("%s > %s newer for %s", ts1,ts2,ourname)
                                 tempdict[tmp_name] = ourname
                         else:
@@ -276,7 +285,7 @@ def perform_split(repos, args, def_modules):
     for modname in repos:
         if args.only_defaults and modname not in def_modules:
             continue
-        
+
         targetdir = os.path.join(args.target, modname)
         os.mkdir(targetdir)
 
@@ -288,7 +297,7 @@ def perform_split(repos, args, def_modules):
                 args.action)
 
 
-def create_repos(target, repos,def_modules, only_defaults):
+def create_repos(target, repos, def_modules, only_defaults):
     """
     Routine to create repositories. Input is target directory and a
     list of repositories.
@@ -337,6 +346,7 @@ def setup_target(args):
         else:
             os.mkdir(args.target)
 
+
 def parse_repository(directory):
     """
     Parse a specific directory, returning a dict with keys module NSVC's and
@@ -353,25 +363,26 @@ def parse_repository(directory):
     # If we have a repository with no modules we do not want our
     # script to error out but just remake the repository with
     # everything in a known sack (aka non_modular).
-     
+
     if 'modules' in repo_info:
-        mod = _parse_repository_modular(repo_info,package_sack)
+        mod = _parse_repository_modular(repo_info, package_sack)
         modpkgset = _get_modular_pkgset(mod)
     else:
         mod = dict()
         modpkgset = set()
 
-    non_modular = _parse_repository_non_modular(package_sack,repo_info, 
-                                  modpkgset) 
+    non_modular = _parse_repository_non_modular(package_sack, repo_info,
+                                                modpkgset)
     mod['non_modular'] = non_modular
 
-    ## We should probably go through our default modules here and
-    ## remove them from our mod. This would cut down some code paths.
+    # We should probably go through our default modules here and
+    # remove them from our mod. This would cut down some code paths.
 
     return mod
 
+
 def main():
-    # Determine what the arguments are and 
+    # Determine what the arguments are and
     args = parse_args()
 
     # Go through arguments and act on their values.
@@ -383,15 +394,16 @@ def main():
         def_modules = get_default_modules(args.repository)
     else:
         def_modules = set()
-    def_modules.add('non_modular')        
-    
+    def_modules.add('non_modular')
+
     if not args.skip_missing:
         if not validate_filenames(args.repository, repos):
             raise ValueError("Package files were missing!")
     if args.target:
         perform_split(repos, args, def_modules)
         if args.create_repos:
-            create_repos(args.target, repos,def_modules,args.only_defaults)
+            create_repos(args.target, repos, def_modules, args.only_defaults)
+
 
 if __name__ == '__main__':
     main()
