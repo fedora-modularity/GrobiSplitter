@@ -206,7 +206,7 @@ def get_default_modules(directory):
         if not res:
             raise Exception("YAML FAILURE: res != True")
 
-    idx.upgrade_streams(2)
+    idx.upgrade_streams(mmd.ModuleStreamVersionEnum.TWO)
 
     # OK this is cave-man no-sleep programming. I expect there is a
     # better way to do this that would be a lot better. However after
