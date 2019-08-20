@@ -185,7 +185,7 @@ def validate_filenames(directory, repoinfo):
     return isok
 
 
-def _get_recursive_dependencies(all_deps, idx, stream):
+def _get_recursive_dependencies(all_deps, idx, stream, ignore_missing_deps):
     if stream.get_NSVCA() in all_deps:
         # We've already encountered this NSVCA, so don't go through it again
         logging.debug('Already included {}'.format(stream.get_NSVCA()))
@@ -228,7 +228,7 @@ def _get_recursive_dependencies(all_deps, idx, stream):
                 for inner_stream in stream_list:
                     try:
                         _get_recursive_dependencies(
-                            local_deps, idx, inner_stream)
+                            local_deps, idx, inner_stream, ignore_missing_deps)
                     except FileNotFoundError as e:
                         # Could not find all of this stream's dependencies in
                         # the repo
@@ -246,7 +246,7 @@ def _get_recursive_dependencies(all_deps, idx, stream):
 
     # We were unable to resolve the dependencies for any of the array entries.
     # raise FileNotFoundError
-    if not found_dep:
+    if not found_dep and not ignore_missing_deps:
         raise FileNotFoundError(
             "Could not resolve dependencies for {}".format(
                 stream.get_NSVCA()))
@@ -254,7 +254,7 @@ def _get_recursive_dependencies(all_deps, idx, stream):
     all_deps.update(local_deps)
 
 
-def get_default_modules(directory):
+def get_default_modules(directory, ignore_missing_deps):
     """
     Work through the list of modules and come up with a default set of
     modules which would be the minimum to output.
@@ -288,7 +288,7 @@ def get_default_modules(directory):
             # Different contexts have different dependencies
             try:
                 logging.debug("Processing {}".format(stream.get_NSVCA()))
-                _get_recursive_dependencies(all_deps, idx, stream)
+                _get_recursive_dependencies(all_deps, idx, stream, ignore_missing_deps)
                 logging.debug("----------")
             except FileNotFoundError as e:
                 # Not all dependencies could be satisfied
@@ -350,6 +350,11 @@ def parse_args():
     parser.add_argument('--create-repos', help='Create repository metadatas',
                         action='store_true', default=False)
     parser.add_argument('--only-defaults', help='Only output default modules',
+                        action='store_true', default=False)
+    parser.add_argument('--ignore-missing-default-deps',
+                        help='When using --only-defaults, do not skip '
+                             'default streams whose dependencies cannot be '
+                             'resolved within this repository',
                         action='store_true', default=False)
     return parser.parse_args()
 
@@ -417,7 +422,7 @@ def main():
     repos = parse_repository(args.repository)
 
     if args.only_defaults:
-        def_modules = get_default_modules(args.repository)
+        def_modules = get_default_modules(args.repository, args.ignore_missing_default_deps)
     else:
         def_modules = set()
 
