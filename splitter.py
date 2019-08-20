@@ -321,6 +321,65 @@ def get_default_modules(directory, ignore_missing_deps):
     return all_deps
 
 
+def _pad_svca(svca, target_length):
+    """
+    If the split() doesn't return all values (e.g. arch is missing), pad it
+    with `None`
+    """
+    length = len(svca)
+    svca.extend([None] * (target_length - length))
+    return svca
+
+
+def _dump_modulemd(modname, yaml_file):
+    idx = _get_modulemd()
+    assert idx
+
+    # Create a new index to hold the information about this particular
+    # module and stream
+    new_idx = mmd.ModuleIndex.new()
+
+    # Add the module streams
+    module_name, *svca = modname.split(':')
+    stream_name, version, context, arch = _pad_svca(svca, 4)
+
+    logging.debug("Dumping YAML for {}, {}, {}, {}, {}".format(
+        module_name, stream_name, version, context, arch))
+
+    mod = idx.get_module(module_name)
+    streams = mod.search_streams(stream_name, int(version), context, arch)
+
+    # This should usually be a single item, but we'll be future-compatible
+    # and account for the possibility of having multiple streams here.
+    for stream in streams:
+        new_idx.add_module_stream(stream)
+
+    # Add the module defaults
+    defs = mod.get_defaults()
+    if defs:
+        new_idx.add_defaults(defs)
+
+    # libmodulemd doesn't currently expose the get_translation()
+    # function, but that will be added in 2.8.0
+    try:
+        # Add the translation object
+        translation = mod.get_translation()
+        if translation:
+            new_idx.add_translation(translation)
+    except AttributeError as e:
+        # This version of libmodulemd does not yet support this function.
+        # Just ignore it.
+        pass
+
+    # Write out the file
+    try:
+        with open(yaml_file, 'w') as output:
+            output.write(new_idx.dump_to_string())
+    except PermissionError as e:
+        logging.error("Could not write YAML to file: {}".format(e))
+        raise
+
+
 def perform_split(repos, args, def_modules):
     for modname in repos:
         if args.only_defaults and modname not in def_modules:
@@ -336,6 +395,10 @@ def perform_split(repos, args, def_modules):
                 os.path.join(targetdir, pkgfile),
                 args.action)
 
+        # Extract the modular metadata for this module
+        if modname != 'non_modular':
+            _dump_modulemd(modname, os.path.join(targetdir, 'modules.yaml'))
+
 
 def create_repos(target, repos, def_modules, only_defaults):
     """
@@ -346,9 +409,19 @@ def create_repos(target, repos, def_modules, only_defaults):
     for modname in repos:
         if only_defaults and modname not in def_modules:
             continue
+
+        targetdir = os.path.join(target, modname)
+
         subprocess.run([
-            'createrepo_c', os.path.join(target, modname),
+            'createrepo_c', targetdir,
             '--no-database'])
+        if modname != 'non_modular':
+            subprocess.run([
+                'modifyrepo_c',
+                '--mdtype=modules',
+                os.path.join(targetdir, 'modules.yaml'),
+                os.path.join(targetdir, 'repodata')
+            ])
 
 
 def parse_args():
