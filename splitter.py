@@ -23,9 +23,8 @@ except ValueError:
     print("libmodulemd 2.0 is not installed..")
     sys.exit(1)
 
-# This code is from Stephen Gallagher to make my other caveman code
-# less icky.
-
+# We only want to load the module metadata once. It can be reused as often as required
+_idx = None
 
 def _get_latest_streams(mymod, stream):
     """
@@ -55,6 +54,45 @@ def _get_repoinfo(directory):
         h.setopt(librepo.LRO_IGNOREMISSING, False)
         r = h.perform()
         return r.getinfo(librepo.LRR_YUM_REPO)
+
+
+def _get_modulemd(directory=None, repo_info=None):
+    """
+    Retrieve the module metadata from this repository.
+    :param directory: The path to the repository. Must contain repodata/repomd.xml and modules.yaml.
+    :param repo_info: An already-acquired repo_info structure
+    :return: A Modulemd.ModulemdIndex object containing the module metadata from this repository.
+    """
+
+    # Return the cached value
+    global _idx
+    if _idx:
+        return _idx
+
+    # If we don't have a cached value, we need either directory or repo_info
+    assert directory or repo_info
+
+    if directory:
+        directory = os.path.abspath(directory)
+        repo_info = _get_repoinfo(directory)
+
+    if 'modules' not in repo_info:
+        return None
+
+    _idx = mmd.ModuleIndex.new()
+
+    with gzip.GzipFile(filename=repo_info['modules'], mode='r') as gzf:
+        mmdcts = gzf.read().decode('utf-8')
+        res, failures = _idx.update_from_string(mmdcts, True)
+        if len(failures) != 0:
+            raise Exception("YAML FAILURE: FAILURES: %s" % failures)
+        if not res:
+            raise Exception("YAML FAILURE: res != True")
+
+    # Ensure that every stream in the index is using v2
+    _idx.upgrade_streams(mmd.ModuleStreamVersionEnum.TWO)
+
+    return _idx
 
 
 def _get_hawkey_sack(repo_info):
@@ -110,14 +148,7 @@ def _parse_repository_modular(repo_info, package_sack):
     contained in.
     """
     cts = {}
-    idx = mmd.ModuleIndex()
-    with gzip.GzipFile(filename=repo_info['modules'], mode='r') as gzf:
-        mmdcts = gzf.read().decode('utf-8')
-        res, failures = idx.update_from_string(mmdcts, True)
-        if len(failures) != 0:
-            raise Exception("YAML FAILURE: FAILURES: %s" % failures)
-        if not res:
-            raise Exception("YAML FAILURE: res != True")
+    idx = _get_modulemd(repo_info=repo_info)
 
     pkgs_list = _get_filelist(package_sack)
     idx.upgrade_streams(2)
@@ -260,24 +291,12 @@ def get_default_modules(directory, ignore_missing_deps):
     modules which would be the minimum to output.
     Returns a set of modules
     """
-    directory = os.path.abspath(directory)
-    repo_info = _get_repoinfo(directory)
 
     all_deps = set()
 
-    if 'modules' not in repo_info:
+    idx = _get_modulemd(directory)
+    if not idx:
         return all_deps
-
-    idx = mmd.ModuleIndex()
-    with gzip.GzipFile(filename=repo_info['modules'], mode='r') as gzf:
-        mmdcts = gzf.read().decode('utf-8')
-        res, failures = idx.update_from_string(mmdcts, True)
-        if len(failures) != 0:
-            raise Exception("YAML FAILURE: FAILURES: %s" % failures)
-        if not res:
-            raise Exception("YAML FAILURE: res != True")
-
-    idx.upgrade_streams(mmd.ModuleStreamVersionEnum.TWO)
 
     for modname, streamname in idx.get_default_streams().items():
         # Only the latest version of a stream is important, as that is the only one that DNF will consider in its
