@@ -12,6 +12,7 @@ import tempfile
 import os
 import subprocess
 import sys
+import time
 import logging
 
 # Look for a specific version of modulemd. The 1.x series does not
@@ -406,6 +407,9 @@ def create_repos(target, repos, def_modules, only_defaults):
     list of repositories.
     Returns None
     """
+
+    time_ns = time.clock_gettime_ns(time.CLOCK_REALTIME)
+
     for modname in repos:
         if only_defaults and modname not in def_modules:
             continue
@@ -422,6 +426,13 @@ def create_repos(target, repos, def_modules, only_defaults):
                 os.path.join(targetdir, 'modules.yaml'),
                 os.path.join(targetdir, 'repodata')
             ])
+
+        # Make sure that all generated repos share identical mtimes
+        # to avoid issues with mergerepo_c
+        for root, dirs, files in os.walk(targetdir, followlinks=True):
+            del dirs
+            for name in files:
+                os.utime(os.path.join(root, name), ns=(time_ns, time_ns))
 
 
 def parse_args():
